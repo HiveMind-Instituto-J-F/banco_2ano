@@ -224,3 +224,4 @@ O banco de dados suporta todo o ciclo de microparadas, do registro inicial no Mo
 Usamos o Redis para armazenar o login do administrador para acessar uma analise detalhada das paradas
 
 https://github.com/HiveMind-Instituto-J-F/TimeLean_Website.git
+
