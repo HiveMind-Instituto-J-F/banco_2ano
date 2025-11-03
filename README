@@ -1,0 +1,226 @@
+# Sistema de Registro de Microparadas
+
+## Visão Geral
+
+Este projeto implementa um sistema de **gestão de microparadas** em ambientes industriais, focado em rastreabilidade, eficiência operacional e análise de dados.
+
+O fluxo principal é:
+
+1. O **trabalhador** identifica uma parada e **registra** o problema no aplicativo.
+2. O **manutencista** recebe a notificação, **executa a manutenção** e atualiza o status.
+3. O sistema **encerra a parada** e registra os dados completos no banco relacional para análise posterior.
+
+O sistema utiliza duas bases integradas:
+
+- **MongoDB:** armazenamento inicial e temporário dos registros de parada.
+- **PostgreSQL:** armazenamento definitivo e auditável das informações.
+
+---
+
+## Arquitetura do Banco de Dados
+
+O modelo relacional suporta todo o fluxo de microparadas, garantindo rastreabilidade total entre trabalhadores, máquinas e manutenções.
+
+### Entidades Principais
+
+#### `trabalhador`
+
+Armazena informações dos usuários do sistema (operadores e manutencistas).
+
+| Campo             | Tipo         | Descrição                                  |
+| ----------------- | ------------ | ------------------------------------------ |
+| `id_trabalhador`  | INT (PK)     | Identificador único                        |
+| `des_tipo_perfil` | VARCHAR(50)  | Perfil do usuário (operador, manutencista) |
+| `des_login`       | VARCHAR(50)  | Login do usuário                           |
+| `des_senha`       | VARCHAR(100) | Senha criptografada                        |
+| `des_setor`       | VARCHAR(50)  | Setor de atuação                           |
+| `des_imagem`      | VARCHAR(255) | Foto ou avatar                             |
+
+**Função:**  
+Ponto de entrada do fluxo; operadores registram paradas e manutencistas finalizam.
+
+---
+
+#### `maquina`
+
+Dados das máquinas que participam do processo produtivo.
+
+| Campo                    | Tipo         | Descrição                |
+| ------------------------ | ------------ | ------------------------ |
+| `id_maquina`             | INT (PK)     | Identificador da máquina |
+| `des_nome`               | VARCHAR(100) | Nome da máquina          |
+| `des_tipo`               | VARCHAR(50)  | Tipo do equipamento      |
+| `des_setor`              | VARCHAR(50)  | Setor de produção        |
+| `des_maquina`            | TEXT         | Detalhes técnicos        |
+| `des_status_operacional` | VARCHAR(50)  | Status atual da máquina  |
+
+**Função:**  
+Base para relatórios de desempenho e identificação de onde ocorreu a parada.
+
+---
+
+#### `manutencao`
+
+Registra ações corretivas e preventivas realizadas pelos manutencistas.
+
+| Campo                | Tipo                                  | Descrição                   |
+| -------------------- | ------------------------------------- | --------------------------- |
+| `id_manutencao`      | INT (PK)                              | Identificador da manutenção |
+| `id_maquina`         | INT (FK → maquina.id_maquina)         | Máquina atendida            |
+| `id_usuario`         | INT (FK → trabalhador.id_trabalhador) | Responsável pela manutenção |
+| `des_acao_realizada` | TEXT                                  | Ação realizada              |
+| `des_setor`          | VARCHAR(50)                           | Setor da intervenção        |
+| `hora_inicio`        | TIME                                  | Início da manutenção        |
+| `hora_fim`           | TIME                                  | Fim da manutenção           |
+| `dt_manutencao`      | DATE                                  | Data da manutenção          |
+
+**Função:**  
+Vincula a intervenção ao registro da parada e documenta o resultado.
+
+---
+
+#### `registro_paradas`
+
+Armazena os eventos de microparada registrados pelos trabalhadores.
+
+| Campo                 | Tipo                                  | Descrição                 |
+| --------------------- | ------------------------------------- | ------------------------- |
+| `id_registro_paradas` | INT (PK)                              | Identificador único       |
+| `hora_inicio`         | TIME                                  | Início da parada          |
+| `hora_fim`            | TIME                                  | Fim da parada             |
+| `id_maquina`          | INT (FK → maquina.id_maquina)         | Máquina afetada           |
+| `id_manutencao`       | INT (FK → manutencao.id_manutencao)   | Manutenção associada      |
+| `id_usuario`          | INT (FK → trabalhador.id_trabalhador) | Trabalhador que registrou |
+| `dt_parada`           | DATE                                  | Data da ocorrência        |
+| `des_setor`           | VARCHAR(50)                           | Setor da parada           |
+| `des_parada`          | TEXT                                  | Detalhes do problema      |
+
+**Função:**  
+Centraliza os registros criados no aplicativo e serve como base para métricas e relatórios após a conclusão da manutenção.
+
+---
+
+#### `login` e `logins_realizados`
+
+Controle de acesso e auditoria de logins.
+
+| Campo             | Tipo         | Descrição                  |
+| ----------------- | ------------ | -------------------------- |
+| `id_login`        | INT (PK)     | Identificador do login     |
+| `des_cnpj`        | VARCHAR(20)  | CNPJ do usuário ou empresa |
+| `des_senha`       | VARCHAR(100) | Senha criptografada        |
+| `des_cadastrante` | VARCHAR(100) | Nome do cadastrante        |
+| `des_email`       | VARCHAR(100) | Email do usuário           |
+
+| Campo            | Tipo                                  | Descrição                         |
+| ---------------- | ------------------------------------- | --------------------------------- |
+| `id_login`       | SERIAL (PK)                           | Registro único do login realizado |
+| `id_trabalhador` | INT (FK → trabalhador.id_trabalhador) | Usuário que realizou login        |
+| `data_login`     | TIMESTAMP                             | Data e hora do login              |
+
+---
+
+#### `dau`
+
+Armazena a frequência diária de acesso (Daily Active Users).
+
+| Campo            | Tipo                                  | Descrição           |
+| ---------------- | ------------------------------------- | ------------------- |
+| `id_dau`         | SERIAL (PK)                           | Identificador único |
+| `id_trabalhador` | INT (FK → trabalhador.id_trabalhador) | Usuário             |
+| `data_acesso`    | DATE                                  | Data do acesso      |
+
+**Função:**  
+Atualizada automaticamente via trigger `trg_atualizar_dau` ao inserir registros em `logins_realizados`.
+
+```sql
+CREATE OR REPLACE FUNCTION fn_atualizar_dau()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO dau (id_trabalhador)
+    VALUES (NEW.id_trabalhador)
+    ON CONFLICT (id_trabalhador, data_acesso) DO NOTHING;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_atualizar_dau
+AFTER INSERT ON logins_realizados
+FOR EACH ROW
+EXECUTE FUNCTION fn_atualizar_dau();
+```
+
+---
+
+## Fluxo de Dados
+
+- ### Registro Inicial (MongoDB)
+
+O trabalhador cria um registro via aplicativo. Os dados são armazenados inicialmente no MongoDB.
+
+Exemplo de arquivo:
+
+```json
+{
+  "_id": "6907b2f139d905b1dc5228db",
+  "id_maquina": 2,
+  "id_usuario": 7,
+  "des_parada": "a esteira está colando e atrapalhando o fluxo",
+  "des_setor": "Montagem",
+  "dt_parada": "2025-11-02T16:32:00.000+00:00",
+  "hora_Inicio": "2025-11-02T16:32:00.000+00:00",
+  "hora_Fim": "2025-11-02T16:35:00.000+00:00"
+```
+
+- ### Encaminhamento ao Manutencista
+
+O sistema identifica a máquina e o setor e envia a notificação ao manutencista. Uma entrada em manutencao é criada e vinculada ao registro da parada.
+
+- ### Conclusão e Sincronização
+  (PstgreSQL)
+
+Após a manutenção, os dados são transferidos para registro_paradas, completando o ciclo do evento.
+
+- ### Auditoria
+
+Todas as alterações disparam triggers que inserem registros em log_operacoes (ou logs de DAU), garantindo rastreabilidade e confiabilidade.
+
+---
+
+## Indexes
+
+```sql
+CREATE INDEX id_registro_paradas ON registro_paradas(id_registro_paradas);
+CREATE INDEX id_login ON login(id_login);
+CREATE INDEX id_manutencao ON manutencao(id_manutencao);
+CREATE INDEX id_trabalhador ON trabalhador(id_trabalhador);
+CREATE INDEX id_maquina ON maquina(id_maquina);
+```
+
+---
+
+## Relacionamentos Principais
+
+`trabalhador` 1:N `registro_paradas`
+
+`trabalhador` 1:N `manutencao`
+
+`trabalhador` 1:N `logins_realizados`
+
+`maquina` 1:N `registro_paradas`
+
+`maquina` 1:N `manutencao`
+
+`registro_paradas` 1:1 `manutencao`
+
+---
+
+## Conclusão
+
+O banco de dados suporta todo o ciclo de microparadas, do registro inicial no MongoDB ao armazenamento definitivo no PostgreSQL. Com logs automáticos e DAU, o sistema fornece base sólida para gestão operacional, manutenção preditiva e análise de desempenho.
+
+---
+
+Usamos o Redis para armazenar o login do administrador para acessar uma analise detalhada das paradas
+
+https://github.com/HiveMind-Instituto-J-F/TimeLean_Website.git
